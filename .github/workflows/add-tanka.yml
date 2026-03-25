@@ -1,0 +1,102 @@
+name: 短歌を追加する
+
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: '短歌'
+        required: true
+        type: string
+      date:
+        description: '詠んだ日（例：2026-03-18）　空白なら今日'
+        required: false
+        type: string
+      series:
+        description: '連作名（複数ある場合はカンマ区切り）　なければ空白'
+        required: false
+        type: string
+      kettei:
+        description: '決定'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  add-tanka:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 短歌をtanka.jsonとnotesに追記
+        env:
+          TEXT: ${{ inputs.text }}
+          DATE: ${{ inputs.date }}
+          SERIES: ${{ inputs.series }}
+          KETTEI: ${{ inputs.kettei }}
+        run: |
+          python3 - << 'EOF'
+          import json, os
+          from datetime import date
+          from pathlib import Path
+
+          # ── keywords.json を読み込む
+          kw_path = Path("keywords.json")
+          if kw_path.exists():
+              raw = json.loads(kw_path.read_text(encoding="utf-8"))
+              # カテゴリ構造をフラットな辞書に展開
+              KEYWORD_DICT = {}
+              for category in raw.values():
+                  KEYWORD_DICT.update(category)
+          else:
+              print("⚠️  keywords.json が見つかりません。タグなしで追加します。")
+              KEYWORD_DICT = {}
+
+          def extract_tags(text):
+              tags = []
+              for tag, patterns in KEYWORD_DICT.items():
+                  for p in patterns:
+                      if p in text:
+                          tags.append(tag)
+                          break
+              return tags
+
+          with open("tanka.json", encoding="utf-8") as f:
+              data = json.load(f)
+
+          text = os.environ["TEXT"].strip()
+          raw_date = os.environ["DATE"].strip()
+          entry_date = raw_date if raw_date else str(date.today())
+          raw_series = os.environ["SERIES"].strip()
+          series = [s.strip() for s in raw_series.split(",") if s.strip()] if raw_series else []
+          kettei = os.environ["KETTEI"].lower() == "true"
+          tags = extract_tags(text)
+
+          data.append({"text": text, "date": entry_date, "series": series, "kettei": kettei})
+
+          with open("tanka.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+
+          Path("notes").mkdir(exist_ok=True)
+          idx = len(data) - 1
+          filename = f"notes/{entry_date}_{idx:04d}.md"
+          series_yaml = "[" + ", ".join(f'"{s}"' for s in series) + "]"
+          tags_yaml = "[" + ", ".join(f'"{t}"' for t in tags) + "]"
+          md = f"---\ndate: {entry_date}\nseries: {series_yaml}\nkettei: {str(kettei).lower()}\ntags: {tags_yaml}\n---\n\n{text}\n"
+
+          with open(filename, "w", encoding="utf-8") as f:
+              f.write(md)
+
+          print(f"追加: {text}")
+          print(f"タグ: {tags}")
+          EOF
+
+      - name: commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tanka.json notes/
+          git diff --staged --quiet || git commit -m "短歌を追加: ${{ inputs.text }}"
+          git push

@@ -1,0 +1,74 @@
+name: 初回セットアップ（tanka.json → notes/ 一括生成）
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tanka.jsonからnotesを一括生成（タグ付き）
+        run: |
+          python3 - << 'EOF'
+          import json
+          from pathlib import Path
+
+          # ── keywords.json を読み込む
+          kw_path = Path("keywords.json")
+          if kw_path.exists():
+              raw = json.loads(kw_path.read_text(encoding="utf-8"))
+              KEYWORD_DICT = {}
+              for category in raw.values():
+                  KEYWORD_DICT.update(category)
+          else:
+              print("⚠️  keywords.json が見つかりません。タグなしで生成します。")
+              KEYWORD_DICT = {}
+
+          def extract_tags(text):
+              tags = []
+              for tag, patterns in KEYWORD_DICT.items():
+                  for p in patterns:
+                      if p in text:
+                          tags.append(tag)
+                          break
+              return tags
+
+          with open("tanka.json", encoding="utf-8") as f:
+              data = json.load(f)
+
+          notes_dir = Path("notes")
+          notes_dir.mkdir(exist_ok=True)
+
+          for i, t in enumerate(data):
+              text = t.get("text", "").strip()
+              if not text:
+                  continue
+
+              date_val = t.get("date", "") or ""
+              series = t.get("series", [])
+              if isinstance(series, str):
+                  series = [s.strip() for s in series.split(",") if s.strip()]
+              kettei = t.get("kettei", False)
+              tags = extract_tags(text)
+
+              filename = notes_dir / f"{date_val}_{i:04d}.md"
+              series_yaml = "[" + ", ".join(f'"{s}"' for s in series) + "]"
+              tags_yaml = "[" + ", ".join(f'"{tag}"' for tag in tags) + "]"
+              md = f"---\ndate: {date_val}\nseries: {series_yaml}\nkettei: {str(kettei).lower()}\ntags: {tags_yaml}\n---\n\n{text}\n"
+              filename.write_text(md, encoding="utf-8")
+
+          print(f"{len(data)}首のmdファイルを生成しました")
+          EOF
+
+      - name: commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add notes/
+          git diff --staged --quiet || git commit -m "notes/ を再生成（keywords.jsonのタグ付き）"
+          git push

@@ -1,0 +1,77 @@
+name: テーマを選ぶ（index.html を切り替え）
+
+on:
+  workflow_dispatch:
+    inputs:
+      theme:
+        description: 'テーマを選んでください'
+        required: true
+        type: choice
+        options:
+          - kasumi
+          - bundan
+          - katsuji
+          - shiro
+          - shubi
+          - yaso
+          - yukawa
+          - yumekawa
+      preserve_config:
+        description: '現在のCONFIG（名前・Xハンドル・URL）を引き継ぐ'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  switch-theme:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 選択テーマを index.html に反映
+        env:
+          THEME: ${{ inputs.theme }}
+          PRESERVE_CONFIG: ${{ inputs.preserve_config }}
+        run: |
+          python3 - << 'EOF'
+          import os
+          import re
+          from pathlib import Path
+
+          theme = os.environ['THEME'].strip()
+          preserve = os.environ.get('PRESERVE_CONFIG', 'true').lower() == 'true'
+
+          src = Path('themes') / f'index-{theme}.html'
+          dst = Path('index.html')
+
+          if not src.exists():
+            print(f"❌ テーマファイルが見つかりません: {src}")
+            raise SystemExit(1)
+
+          new_html = src.read_text(encoding='utf-8')
+
+          if preserve and dst.exists():
+            old_html = dst.read_text(encoding='utf-8')
+            config_pattern = re.compile(r"const\s+CONFIG\s*=\s*\{[\s\S]*?\};")
+            old_config = config_pattern.search(old_html)
+            new_config = config_pattern.search(new_html)
+            if old_config and new_config:
+              new_html = new_html.replace(new_config.group(0), old_config.group(0), 1)
+              print('✅ 既存のCONFIGを引き継ぎました')
+            else:
+              print('ℹ️ CONFIGブロックを引き継げなかったため、テーマ既定値を使用します')
+
+          dst.write_text(new_html, encoding='utf-8')
+          print(f'✅ index.html を {theme} テーマに切り替えました')
+          EOF
+
+      - name: commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --staged --quiet || git commit -m "テーマを変更: ${{ inputs.theme }}"
+          git push
